@@ -1,4 +1,4 @@
-import { ReactNode, useRef, useState } from 'react';
+import { ReactNode, useEffect, useRef, useState } from 'react';
 import { Alert, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
@@ -11,6 +11,7 @@ import {
 } from 'expo-camera';
 import { COLORS, MIN_TAP } from '@/lib/theme';
 import { persistRun } from '@/lib/storage';
+import { isLedConnected, onLedConnectionChange } from '@/lib/ledDevice';
 import { PLRRunner } from '@/components/PLRRunner';
 import { GazeRunner } from '@/components/GazeRunner';
 import { PROTOCOL_LABEL, type AnyTrial, type Protocol, type Run } from '@/lib/types';
@@ -23,8 +24,8 @@ const RECORD_OPTS: CameraRecordingOptions = { maxDuration: 600 };
 const SEQUENCE: Protocol[] = ['PLR', 'horizontal_gaze', 'vertical_gaze'];
 
 // Renders the active stimulus runner for a protocol.
-const RUNNERS: Record<Protocol, (onDone: (t: AnyTrial[], c: boolean) => void, setTorch: (on: boolean) => void) => ReactNode> = {
-  PLR: (onDone, setTorch) => <PLRRunner onDone={onDone} setTorch={setTorch} />,
+const RUNNERS: Record<Protocol, (onDone: (t: AnyTrial[], c: boolean) => void) => ReactNode> = {
+  PLR: (onDone) => <PLRRunner onDone={onDone} />,
   horizontal_gaze: (onDone) => (
     <GazeRunner protocolLabel="Horizontal Gaze" axis="x" directions={['right', 'left']} onDone={onDone} />
   ),
@@ -47,7 +48,10 @@ export function SessionFlow() {
   const [index, setIndex] = useState(0); // which protocol in SEQUENCE
   const [runKey, setRunKey] = useState(0); // bump to remount runner + camera per protocol
   const [completed, setCompleted] = useState<Run[]>([]); // finished runs this session
-  const [torch, setTorch] = useState(false); // PLR runner controls torch
+  const [ledConnected, setLedConnected] = useState(isLedConnected());
+
+  // PLR stimulus comes from the BLE LED board — surface its link state.
+  useEffect(() => onLedConnectionChange(setLedConnected), []);
 
   const sessionId = useRef('');
   const sessionStartedAt = useRef('');
@@ -182,12 +186,11 @@ export function SessionFlow() {
             facing="back"
             mode="video"
             active
-            enableTorch={torch}
             onCameraReady={startRecording}
             pointerEvents="none"
           />
         )}
-        {RUNNERS[SEQUENCE[index]](onDone, setTorch)}
+        {RUNNERS[SEQUENCE[index]](onDone)}
       </View>
     );
   }
@@ -270,7 +273,7 @@ export function SessionFlow() {
 
         <View style={styles.summaryCard}>
           {[
-            { label: 'Test 1', value: 'PLR (flashlight)' },
+            { label: 'Test 1', value: 'PLR (BLE LED board)' },
             { label: 'Test 2', value: 'Horizontal gaze' },
             { label: 'Test 3', value: 'Vertical gaze' },
             { label: 'Recording', value: 'Back camera · eye mount', highlight: true },
@@ -287,7 +290,7 @@ export function SessionFlow() {
           {[
             'Fit the phone into the eye attachment so the BACK camera sits right against your eye.',
             'You will not see the screen — follow the SPOKEN directions.',
-            'PLR: Keep your eyes open and looking into the camera. A flashlight will flash.',
+            'PLR: Keep your eyes open and looking into the camera. The LED board will flash.',
             'Gaze: keep your HEAD still and move only your EYES as guided.',
             'All three tests record automatically and save as one grouped session.',
           ].map((s, i) => (
@@ -299,6 +302,9 @@ export function SessionFlow() {
         </View>
 
         <Text style={[styles.permLine, { color: canRecord ? COLORS.ok : COLORS.subtle }]}>{permLine}</Text>
+        <Text style={[styles.permLine, { color: ledConnected ? COLORS.ok : COLORS.subtle }]}>
+          {ledConnected ? '✓ LED board connected' : 'Searching for LED board…'}
+        </Text>
 
         <Text style={styles.fieldLabel}>Tag / note (optional)</Text>
         <TextInput

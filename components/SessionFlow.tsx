@@ -137,22 +137,14 @@ export function SessionFlow() {
       return;
     }
     // PLR needs the BLE LED board — without it every stimulus write is
-    // silently skipped and the light never flashes.
+    // silently skipped and the light never flashes. Hard requirement.
     if (!isLedConnected()) {
       Alert.alert(
         'LED board not connected',
         'The PLR stimulus comes from the LED board. Power-cycle the board and wait for "LED board connected" before starting.',
-        [
-          { text: 'Cancel', style: 'cancel' },
-          { text: 'Start anyway', style: 'destructive', onPress: () => reallyBegin() },
-        ],
       );
       return;
     }
-    reallyBegin();
-  };
-
-  const reallyBegin = () => {
     sessionId.current = Crypto.randomUUID();
     sessionStartedAt.current = new Date().toISOString();
     setCompleted([]);
@@ -376,8 +368,14 @@ export function SessionFlow() {
         />
 
         {canRecord ? (
-          <Pressable style={styles.primary} onPress={beginSession}>
-            <Text style={styles.primaryText}>Begin Session  →</Text>
+          <Pressable
+            style={[styles.primary, !ledConnected && styles.primaryDisabled]}
+            onPress={beginSession}
+            disabled={!ledConnected}
+          >
+            <Text style={styles.primaryText}>
+              {ledConnected ? 'Begin Session  →' : 'Waiting for LED board…'}
+            </Text>
           </Pressable>
         ) : (
           <Pressable style={styles.primary} onPress={requestPerms}>
@@ -483,6 +481,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     marginTop: 16,
   },
+  primaryDisabled: { opacity: 0.4 },
   primaryText: { color: '#06281F', fontSize: 17, fontWeight: '800' },
   secondary: {
     minHeight: MIN_TAP,

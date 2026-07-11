@@ -1,10 +1,10 @@
 import { useCallback, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { useVideoPlayer, VideoView } from 'expo-video';
 import { COLORS, MIN_TAP } from '@/lib/theme';
-import { loadRuns } from '@/lib/storage';
+import { loadRuns, shareVideo } from '@/lib/storage';
 import { buildEvents, type SessionEvent } from '@/lib/events';
 import { PROTOCOL_LABEL, type Run } from '@/lib/types';
 
@@ -41,6 +41,7 @@ function ProtocolBlock({ run }: { run: Run }) {
   const player = useVideoPlayer(run.video_uri ?? null, (p) => p.pause());
   const events = buildEvents(run);
   const videoStart = ms(run.video_started_at ?? run.timestamp);
+  const json = JSON.stringify(run, null, 2);
 
   const seekTo = (offsetMs: number) => {
     if (!run.video_uri) return;
@@ -58,7 +59,16 @@ function ProtocolBlock({ run }: { run: Run }) {
       </View>
 
       {run.video_uri ? (
-        <VideoView style={styles.video} player={player} nativeControls contentFit="contain" />
+        <>
+          <VideoView style={styles.video} player={player} nativeControls contentFit="contain" />
+          <View style={styles.mediaActions}>
+            <Pressable
+              style={styles.mediaBtn}
+              onPress={() => shareVideo(run.video_uri!).catch((e) => Alert.alert('Share failed', String(e)))}>
+              <Text style={styles.mediaBtnText}>Share video</Text>
+            </Pressable>
+          </View>
+        </>
       ) : (
         <View style={[styles.video, styles.noVideo]}>
           <Text style={styles.empty}>No video recorded.</Text>
@@ -83,6 +93,12 @@ function ProtocolBlock({ run }: { run: Run }) {
         );
       })}
       {events.length === 0 && <Text style={styles.empty}>No events.</Text>}
+
+      <Text style={styles.sectionLabel}>RUN JSON</Text>
+      <View style={styles.jsonWrap}>
+        <Text style={styles.jsonStats}>{json.length} characters · stored in app session record</Text>
+        <Text selectable style={styles.jsonText}>{json}</Text>
+      </View>
     </View>
   );
 }
@@ -103,6 +119,7 @@ export default function SessionReport() {
   );
 
   const startedAt = runs?.[0]?.session_started_at ?? runs?.[0]?.timestamp;
+  const participantId = runs?.[0]?.participant_id;
   const tag = runs?.[0]?.tag;
 
   return (
@@ -124,6 +141,7 @@ export default function SessionReport() {
             <Text style={styles.meta}>{startedAt ? new Date(startedAt).toLocaleString() : ''}</Text>
             <Text style={styles.meta}>{runs.length} test{runs.length === 1 ? '' : 's'}</Text>
           </View>
+          {!!participantId && <Text style={styles.tag}>Participant: {participantId}</Text>}
           {!!tag && <Text style={styles.tag}>Tag: {tag}</Text>}
 
           {runs.map((r) => (
@@ -156,6 +174,16 @@ const styles = StyleSheet.create({
   blockStatus: { fontSize: 12, fontWeight: '700' },
   video: { width: '100%', aspectRatio: 16 / 9, backgroundColor: '#000', borderRadius: 8 },
   noVideo: { alignItems: 'center', justifyContent: 'center' },
+  mediaActions: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginTop: 10 },
+  mediaBtn: {
+    minHeight: 40,
+    paddingHorizontal: 14,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: COLORS.cardBorder,
+    justifyContent: 'center',
+  },
+  mediaBtnText: { color: COLORS.accent, fontSize: 13, fontWeight: '700' },
   hint: { color: COLORS.faint, fontSize: 12, paddingVertical: 8 },
   row: {
     flexDirection: 'row',
@@ -170,5 +198,21 @@ const styles = StyleSheet.create({
   rowType: { fontSize: 14, fontWeight: '700' },
   rowDetail: { color: COLORS.subtle, fontSize: 12, marginTop: 1 },
   rowAbs: { color: COLORS.faint, fontSize: 11, fontVariant: ['tabular-nums'] },
+  sectionLabel: { color: COLORS.faint, fontSize: 12, fontWeight: '800', letterSpacing: 1.5, marginTop: 14 },
+  jsonWrap: {
+    backgroundColor: '#08110F',
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: COLORS.cardBorder,
+    padding: 12,
+    marginTop: 8,
+  },
+  jsonStats: { color: COLORS.faint, fontSize: 11, marginBottom: 10 },
+  jsonText: {
+    color: COLORS.text,
+    fontSize: 12,
+    lineHeight: 18,
+    fontFamily: 'Courier New',
+  },
   empty: { color: COLORS.faint, fontSize: 14, padding: 20 },
 });

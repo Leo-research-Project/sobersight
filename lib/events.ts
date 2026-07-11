@@ -36,13 +36,11 @@ export function buildEvents(run: Run): SessionEvent[] {
       if (tr.end_time) events.push({ type: 'dark_post_end', timestamp: tr.end_time, repetition: tr.trial_number });
     }
   } else {
-    // Gaze protocols — phase begin/end events. The direction is the ACTUAL
-    // eye-movement direction (left/right/up/down) and is encoded into the event
-    // type so every direction is explicit in the log, e.g. move_right_begin,
-    // move_up_begin. The direction field is also kept for structured queries.
+    // Horizontal gaze — one begin/end event per movement phase. The phase name
+    // already encodes the side (move_right, hold_left, center_from_right, …).
     for (const tr of run.trials as GazeTrial[]) {
-      events.push({ type: `${tr.phase}_${tr.direction}_begin`, timestamp: tr.start_time, direction: tr.direction, phase: tr.phase, rep: tr.rep });
-      if (tr.end_time) events.push({ type: `${tr.phase}_${tr.direction}_end`, timestamp: tr.end_time, direction: tr.direction, phase: tr.phase, rep: tr.rep });
+      events.push({ type: `${tr.phase}_begin`, timestamp: tr.start_time, phase: tr.phase, rep: tr.rep });
+      if (tr.end_time) events.push({ type: `${tr.phase}_end`, timestamp: tr.end_time, phase: tr.phase, rep: tr.rep });
     }
   }
 

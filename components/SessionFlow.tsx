@@ -1,5 +1,5 @@
-import { ReactNode, useEffect, useRef, useState } from 'react';
-import { Alert, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { ReactNode, useRef, useState, useEffect } from 'react';
+import { Alert, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View, KeyboardAvoidingView } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import * as Crypto from 'expo-crypto';
@@ -11,6 +11,7 @@ import {
 } from 'expo-camera';
 import { COLORS, MIN_TAP } from '@/lib/theme';
 import { persistRun } from '@/lib/storage';
+import { getAllParticipants } from '@/lib/participantRegistry';
 import { isLedConnected, onLedConnectionChange } from '@/lib/ledDevice';
 import { PLRRunner } from '@/components/PLRRunner';
 import { GazeRunner } from '@/components/GazeRunner';
@@ -20,18 +21,14 @@ type Stage = 'intro' | 'running' | 'between' | 'done';
 
 const RECORD_OPTS: CameraRecordingOptions = { maxDuration: 600 };
 
-// The full session runs all three protocols back-to-back, in this order.
-const SEQUENCE: Protocol[] = ['PLR', 'horizontal_gaze', 'vertical_gaze'];
+// The session runs both protocols back-to-back, in this order.
+const SEQUENCE: Protocol[] = ['PLR', 'horizontal_gaze'];
 
-// Renders the active stimulus runner for a protocol.
-const RUNNERS: Record<Protocol, (onDone: (t: AnyTrial[], c: boolean) => void) => ReactNode> = {
+// Renders the active stimulus runner for a protocol. PLR stimulus comes
+// from the BLE LED board (see lib/ledDevice), not the phone torch.
+const RUNNERS: Record<Protocol, (onDone: (t: AnyTrial[], c: boolean) => void, setCameraActive: (active: boolean) => void) => ReactNode> = {
   PLR: (onDone) => <PLRRunner onDone={onDone} />,
-  horizontal_gaze: (onDone) => (
-    <GazeRunner protocolLabel="Horizontal Gaze" axis="x" directions={['right', 'left']} onDone={onDone} />
-  ),
-  vertical_gaze: (onDone) => (
-    <GazeRunner protocolLabel="Vertical Gaze" axis="y" directions={['up', 'down']} onDone={onDone} />
-  ),
+  horizontal_gaze: (onDone, setCameraActive) => <GazeRunner onDone={onDone} setCameraActive={setCameraActive} />,
 };
 
 function durationMs(trials: AnyTrial[]): number {
@@ -44,11 +41,18 @@ function durationMs(trials: AnyTrial[]): number {
 export function SessionFlow() {
   const router = useRouter();
   const [stage, setStage] = useState<Stage>('intro');
+  const [participantId, setParticipantId] = useState('');
   const [tag, setTag] = useState('');
   const [index, setIndex] = useState(0); // which protocol in SEQUENCE
   const [runKey, setRunKey] = useState(0); // bump to remount runner + camera per protocol
   const [completed, setCompleted] = useState<Run[]>([]); // finished runs this session
+  const [existingParticipants, setExistingParticipants] = useState<string[]>([]);
+  const [cameraActive, setCameraActive] = useState(true);
   const [ledConnected, setLedConnected] = useState(isLedConnected());
+
+  useEffect(() => {
+    getAllParticipants().then(setExistingParticipants);
+  }, []);
 
   // PLR stimulus comes from the BLE LED board — surface its link state.
   useEffect(() => onLedConnectionChange(setLedConnected), []);
@@ -66,6 +70,7 @@ export function SessionFlow() {
   const recording = useRef(false);
   const recordPromise = useRef<Promise<{ uri: string } | undefined> | null>(null);
   const videoStartedAt = useRef<string | null>(null);
+  const videoStoppedAt = useRef<string | null>(null);
 
   // Start recording AFTER onCameraReady — iOS often still reports "Camera is not
   // ready yet" if recordAsync is called immediately, so delay + retry.
@@ -99,6 +104,7 @@ export function SessionFlow() {
 
   const stopRecording = async (): Promise<string | null> => {
     if (!recording.current) return null;
+    videoStoppedAt.current = new Date().toISOString(); // end of the video timeline
     try {
       cameraRef.current?.stopRecording();
       const r = await recordPromise.current;
@@ -125,6 +131,11 @@ export function SessionFlow() {
 
   // Begin the whole session at the first protocol.
   const beginSession = () => {
+    const participant = participantId.trim();
+    if (!participant) {
+      Alert.alert('Participant ID required', 'Enter a participant ID before starting the session.');
+      return;
+    }
     sessionId.current = Crypto.randomUUID();
     sessionStartedAt.current = new Date().toISOString();
     setCompleted([]);
@@ -135,8 +146,10 @@ export function SessionFlow() {
   const startProtocol = (i: number) => {
     startedAt.current = new Date().toISOString();
     videoStartedAt.current = null;
+    videoStoppedAt.current = null;
     recording.current = false;
     setIndex(i);
+    setCameraActive(true);
     setRunKey((k) => k + 1);
     setStage('running');
   };
@@ -149,6 +162,7 @@ export function SessionFlow() {
       session_id: sessionId.current,
       session_index: index,
       session_started_at: sessionStartedAt.current,
+      participant_id: participantId.trim(),
       protocol,
       timestamp: startedAt.current,
       tag: tag.trim(),
@@ -156,10 +170,17 @@ export function SessionFlow() {
       completed: didComplete,
       video_uri: null,
       video_started_at: videoStartedAt.current,
+      video_stopped_at: videoStoppedAt.current,
     };
 
     // AUTO-SAVE after each protocol — completion AND mid-protocol exit.
-    await persistRun(run, rawUri);
+    // persistRun never throws (data is saved to AsyncStorage even if file
+    // export fails); guard anyway so the flow always advances.
+    try {
+      await persistRun(run, rawUri);
+    } catch (e) {
+      Alert.alert('Save warning', `Could not fully save this test: ${String(e)}`);
+    }
     const done = [...completed, run];
     setCompleted(done);
 
@@ -179,7 +200,7 @@ export function SessionFlow() {
     // Full-screen back camera behind the runner (single proven recording path).
     return (
       <View key={runKey} style={styles.full}>
-        {canRecord && (
+        {canRecord && cameraActive && (
           <CameraView
             ref={cameraRef}
             style={StyleSheet.absoluteFill}
@@ -190,7 +211,7 @@ export function SessionFlow() {
             pointerEvents="none"
           />
         )}
-        {RUNNERS[SEQUENCE[index]](onDone)}
+        {RUNNERS[SEQUENCE[index]](onDone, setCameraActive)}
       </View>
     );
   }
@@ -229,7 +250,7 @@ export function SessionFlow() {
         <ScrollView contentContainerStyle={styles.body}>
           <Text style={styles.title}>Session complete</Text>
           <Text style={[styles.progressLine, { color: COLORS.ok }]}>
-            ✓ {completed.length} test{completed.length === 1 ? '' : 's'} saved as one session
+            ✓ {completed.length} test{completed.length === 1 ? '' : 's'} saved for participant {participantId.trim()}
           </Text>
 
           {completed.map((r) => {
@@ -258,25 +279,25 @@ export function SessionFlow() {
     );
   }
 
-  // Intro — one Pre-Session Setup for the whole 3-test session.
+  // Intro — one Pre-Session Setup for the whole 2-test session.
   const permLine = canRecord ? '✓ Camera & mic ready' : 'Camera & mic permission needed to record';
   return (
     <SafeAreaView style={styles.screen}>
-      <ScrollView contentContainerStyle={styles.introBody}>
+      <KeyboardAvoidingView style={styles.screen} behavior="padding" keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 25}>
+        <ScrollView contentContainerStyle={styles.introBody} keyboardShouldPersistTaps="handled">
         <Pressable style={styles.backLink} onPress={() => router.back()} hitSlop={10}>
           <Text style={styles.backLinkText}>‹ Back</Text>
         </Pressable>
         <Text style={styles.bigTitle}>Pre-Session Setup</Text>
         <Text style={styles.instructions}>
-          One session runs all three tests back-to-back. After each test finishes you continue to the next.
+          One session runs both tests back-to-back. After each test finishes you continue to the next.
         </Text>
 
         <View style={styles.summaryCard}>
           {[
             { label: 'Test 1', value: 'PLR (BLE LED board)' },
-            { label: 'Test 2', value: 'Horizontal gaze' },
-            { label: 'Test 3', value: 'Vertical gaze' },
-            { label: 'Recording', value: 'Back camera · eye mount', highlight: true },
+            { label: 'Test 2', value: 'Horizontal gaze (self-test)' },
+            { label: 'Recording', value: 'Rear camera · one eye', highlight: true },
           ].map((row, i, arr) => (
             <View key={i} style={[styles.summaryRow, i < arr.length - 1 && styles.summaryRowDivider]}>
               <Text style={styles.summaryLabel}>{row.label}</Text>
@@ -288,11 +309,11 @@ export function SessionFlow() {
         <Text style={styles.sectionLabel}>CHECKLIST</Text>
         <View style={styles.steps}>
           {[
-            'Fit the phone into the eye attachment so the BACK camera sits right against your eye.',
-            'You will not see the screen — follow the SPOKEN directions.',
-            'PLR: Keep your eyes open and looking into the camera. The LED board will flash.',
-            'Gaze: keep your HEAD still and move only your EYES as guided.',
-            'All three tests record automatically and save as one grouped session.',
+            'PLR: fit the phone into the eye attachment so the REAR camera sits against the eye. The LED board will flash — keep the eye open and looking into the camera.',
+            'Horizontal gaze: hold the phone with the rear-camera attachment recording ONE eye.',
+            'Use your free hand as the target: extend your arm, make a fist, and raise one finger for the other eye to follow.',
+            'Start at center. Move your finger center → right over 3s, hold 1s, return center, move center → left over 3s, hold 1s, return center. Repeat 3 times.',
+            'Both tests record automatically and save as one grouped session.',
           ].map((s, i) => (
             <View key={i} style={styles.stepRow}>
               <Text style={styles.stepNum}>{String(i + 1).padStart(2, '0')}</Text>
@@ -306,12 +327,33 @@ export function SessionFlow() {
           {ledConnected ? '✓ LED board connected' : 'Searching for LED board…'}
         </Text>
 
-        <Text style={styles.fieldLabel}>Tag / note (optional)</Text>
+        <Text style={styles.fieldLabel}>Participant ID</Text>
+        <TextInput
+          style={styles.input}
+          value={participantId}
+          onChangeText={setParticipantId}
+          placeholder="e.g. P001"
+          placeholderTextColor={COLORS.faint}
+          autoCapitalize="characters"
+          autoCorrect={false}
+          returnKeyType="next"
+        />
+        {existingParticipants.length > 0 && (
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.existingScroll}>
+            {existingParticipants.map(p => (
+              <Pressable key={p} style={styles.existingPill} onPress={() => setParticipantId(p)}>
+                <Text style={styles.existingPillText}>{p}</Text>
+              </Pressable>
+            ))}
+          </ScrollView>
+        )}
+
+        <Text style={styles.fieldLabel}>Session (optional)</Text>
         <TextInput
           style={styles.input}
           value={tag}
           onChangeText={setTag}
-          placeholder="e.g. morning, trial 3"
+          placeholder="e.g. session 1"
           placeholderTextColor={COLORS.faint}
           returnKeyType="done"
         />
@@ -326,6 +368,7 @@ export function SessionFlow() {
           </Pressable>
         )}
       </ScrollView>
+      </KeyboardAvoidingView>
     </SafeAreaView>
   );
 }
@@ -384,6 +427,17 @@ const styles = StyleSheet.create({
     fontSize: 16,
     backgroundColor: COLORS.card,
   },
+  existingScroll: { marginTop: 4, flexDirection: 'row', marginBottom: 4 },
+  existingPill: {
+    backgroundColor: 'rgba(100, 255, 218, 0.1)',
+    borderWidth: 1,
+    borderColor: 'rgba(100, 255, 218, 0.3)',
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    marginRight: 6,
+  },
+  existingPillText: { color: COLORS.accent, fontSize: 13, fontWeight: '700' },
   nextCard: {
     backgroundColor: COLORS.card,
     borderRadius: 14,

@@ -74,6 +74,8 @@ export function PLRRunner({ onDone }: Props) {
   };
 
   useEffect(() => {
+    const activeTimers = timers.current;
+
     (async () => {
       await speakAsync('Keep your eyes open and look at the camera.');
       if (cancelled.current) return finish(false);
@@ -123,7 +125,7 @@ export function PLRRunner({ onDone }: Props) {
 
     return () => {
       cancelled.current = true;
-      timers.current.forEach((t) => t.cancel());
+      activeTimers.forEach((t) => t.cancel());
       Speech.stop();
       led(LED_BASELINE_LEVEL); // back to the 10% idle level
     };

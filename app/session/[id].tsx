@@ -87,6 +87,7 @@ export default function SessionDetail() {
           {run.completed ? 'Complete' : 'Partial'}
         </Text>
       </View>
+      {!!run.participant_id && <Text style={styles.tag}>Participant: {run.participant_id}</Text>}
       {!!run.tag && <Text style={styles.tag}>Tag: {run.tag}</Text>}
       <Text style={styles.hint}>
         {run.video_uri ? 'Tap any event to jump the video to that moment.' : 'Event timeline:'}

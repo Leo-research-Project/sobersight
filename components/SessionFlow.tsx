@@ -136,6 +136,23 @@ export function SessionFlow() {
       Alert.alert('Participant ID required', 'Enter a participant ID before starting the session.');
       return;
     }
+    // PLR needs the BLE LED board — without it every stimulus write is
+    // silently skipped and the light never flashes.
+    if (!isLedConnected()) {
+      Alert.alert(
+        'LED board not connected',
+        'The PLR stimulus comes from the LED board. Power-cycle the board and wait for "LED board connected" before starting.',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          { text: 'Start anyway', style: 'destructive', onPress: () => reallyBegin() },
+        ],
+      );
+      return;
+    }
+    reallyBegin();
+  };
+
+  const reallyBegin = () => {
     sessionId.current = Crypto.randomUUID();
     sessionStartedAt.current = new Date().toISOString();
     setCompleted([]);

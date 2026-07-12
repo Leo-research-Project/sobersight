@@ -12,8 +12,8 @@ const CHAR_UUID = 'abcd1234-1234-1234-1234-abcdef123456';
 const SCAN_TIMEOUT_MS = 10000;
 
 // PLR stimulus brightness levels, 0–255.
-export const LED_BASELINE_LEVEL = 26; // 10%
-export const LED_STIMULUS_LEVEL = 140; // 55%
+export const LED_BASELINE_LEVEL = 15; // 6%
+export const LED_STIMULUS_LEVEL = 102; // 40%
 export const LED_OFF = 0;
 
 let manager: BleManager | null = null;

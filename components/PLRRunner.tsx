@@ -4,21 +4,30 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as Haptics from 'expo-haptics';
 import * as Speech from 'expo-speech';
 import { COLORS } from '@/lib/theme';
+import { LED_BASELINE_LEVEL, LED_STIMULUS_LEVEL, setLedLevel } from '@/lib/ledDevice';
 import type { PLRTrial } from '@/lib/types';
 
 const mmss = (s: number) => `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
 
-const DARK_MS = 5000;
-const FLASH_MS = 100;
+// Stimulus comes from the BLE LED board (ESP32C3), not the phone torch.
+// Each trial: 5s baseline (10% LED) → 0.1s stimulus (55%) → 5s baseline.
+// PLRTrial keeps the flash_* field names; they mark the stimulus window.
+const BASELINE_MS = 5000;
+const STIMULUS_MS = 100;
 
 const nowISO = () => new Date().toISOString();
 
+// Fire-and-forget brightness write — BLE latency must not shift the
+// protocol timeline, and timestamps are stamped when the write is issued.
+const led = (level: number) => {
+  setLedLevel(level).catch(() => {});
+};
+
 interface Props {
   onDone: (trials: PLRTrial[], completed: boolean) => void;
-  setTorch: (on: boolean) => void;
 }
 
-export function PLRRunner({ onDone, setTorch }: Props) {
+export function PLRRunner({ onDone }: Props) {
   const insets = useSafeAreaInsets();
   const [phase, setPhase] = useState('Wait'); // "Wait" | "Flash"
   const [trialNum, setTrialNum] = useState(0); // current trial 1..3
@@ -54,7 +63,7 @@ export function PLRRunner({ onDone, setTorch }: Props) {
   const finish = (completed: boolean) => {
     if (doneGuard.current) return;
     doneGuard.current = true;
-    setTorch(false);
+    led(LED_BASELINE_LEVEL); // board holds 10% whenever idle
     onDone(trialsRef.current, completed);
   };
 
@@ -87,23 +96,24 @@ export function PLRRunner({ onDone, setTorch }: Props) {
         trialsRef.current.push(trial);
         setTrialNum(n);
 
-        // 5s dark
+        // 5s baseline — LED at 10%
         setPhase('Wait');
-        await sleep(DARK_MS);
+        led(LED_BASELINE_LEVEL);
+        await sleep(BASELINE_MS);
         if (cancelled.current) { trial.end_time = nowISO(); return finish(false); }
 
-        // 0.1s flash
+        // 0.1s stimulus — LED at 55%
         setPhase('Flash');
-        setTorch(true);
+        led(LED_STIMULUS_LEVEL);
         trial.flash_started_at = nowISO();
-        await sleep(FLASH_MS);
+        await sleep(STIMULUS_MS);
         trial.flash_ended_at = nowISO();
-        setTorch(false);
+        led(LED_BASELINE_LEVEL);
         if (cancelled.current) { trial.end_time = nowISO(); return finish(false); }
 
-        // 5s dark
+        // 5s baseline — LED back at 10%
         setPhase('Wait');
-        await sleep(DARK_MS);
+        await sleep(BASELINE_MS);
         trial.end_time = nowISO();
         if (cancelled.current) return finish(false);
       }
@@ -114,7 +124,7 @@ export function PLRRunner({ onDone, setTorch }: Props) {
       cancelled.current = true;
       timers.current.forEach((t) => t.cancel());
       Speech.stop();
-      setTorch(false);
+      led(LED_BASELINE_LEVEL); // back to the 10% idle level
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
